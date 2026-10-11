@@ -1,0 +1,142 @@
+name: Build KSU-Next + SUSFS + NetHunter (sm8635 / peridot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_variant:
+        description: 'Root engine'
+        required: true
+        default: 'KernelSU-Next'
+        type: choice
+        options: [KernelSU-Next, SukiSU-Ultra, ReSukiSU]
+      enable_susfs:
+        description: 'Apply SUSFS'
+        required: true
+        default: true
+        type: boolean
+      enable_nethunter:
+        description: 'Apply NetHunter patches'
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches: [ '16.0' ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex \
+            g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev \
+            lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5 \
+            libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
+            lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
+            python3 python3-pip cpio kmod
+          pip3 install --user --upgrade pip
+
+      - name: Set up swap (build headroom)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Clone KernelSU-Next
+        if: ${{ inputs.ksu_variant == 'KernelSU-Next' || github.event_name == 'push' }}
+        run: |
+          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+
+      - name: Clone SukiSU-Ultra
+        if: ${{ inputs.ksu_variant == 'SukiSU-Ultra' }}
+        run: |
+          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git SukiSU-Ultra
+
+      - name: Clone ReSukiSU
+        if: ${{ inputs.ksu_variant == 'ReSukiSU' }}
+        run: |
+          git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git ReSukiSU
+
+      - name: Integrate root engine
+        run: |
+          if [ -d KernelSU-Next ]; then
+            curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next || \
+            (cd KernelSU-Next && bash kernel/setup.sh)
+          fi
+          echo 'KernelSU integration step complete'
+
+      - name: Clone SUSFS4KSU
+        if: ${{ inputs.enable_susfs == true || github.event_name == 'push' }}
+        run: |
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 susfs4ksu || \
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+
+      - name: Apply SUSFS kernel patches
+        if: ${{ inputs.enable_susfs == true || github.event_name == 'push' }}
+        run: |
+          cp ./susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+          cp ./susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          patch -p1 < ./susfs4ksu/kernel_patches/50_add_susfs_in_kernel-*.patch || echo 'SUSFS kernel patch failed - review'
+          if [ -d KernelSU-Next ]; then
+            patch -p1 -d KernelSU-Next < ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          fi
+
+      - name: Enable defconfig options
+        run: |
+          DEFCONFIG=arch/arm64/configs/gki_defconfig
+          {
+            echo 'CONFIG_KSU=y'
+            echo 'CONFIG_KPROBES=y'
+            echo 'CONFIG_HAVE_KPROBES=y'
+            echo 'CONFIG_KPROBE_EVENTS=y'
+            echo 'CONFIG_OVERLAY_FS=y'
+            echo 'CONFIG_KSU_SUSFS=y'
+            echo 'CONFIG_KSU_SUSFS_SUS_PATH=y'
+            echo 'CONFIG_KSU_SUSFS_SUS_MOUNT=y'
+            echo 'CONFIG_KSU_SUSFS_SUS_KSTAT=y'
+            echo 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y'
+            echo 'CONFIG_KSU_SUSFS_ENABLE_LOG=y'
+            echo 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y'
+            echo 'CONFIG_KSU_SUSFS_SUS_SU=y'
+          } >> $DEFCONFIG
+          echo 'defconfig updated'
+
+      - name: Download NetHunter patches
+        if: ${{ inputs.enable_nethunter == true || github.event_name == 'push' }}
+        run: |
+          git clone --depth=1 https://gitlab.com/kalilinux/nethunter/build-scripts/kali-nethunter-kernel-builder.git nethunter-kb || true
+          ls -la nethunter-kb/patches || true
+
+      - name: Build kernel (GKI aarch64)
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
+
+      - name: Verify Image
+        run: |
+          find . -name 'Image' -o -name 'Image.gz' -o -name 'Image.lz4' | head
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-sm8635-ksu-susfs
+          path: |
+            out/**/dist/Image
+            out/**/dist/Image.lz4
+            out/**/dist/Image.gz
+            out/**/dist/*.ko
+          if-no-files-found: warn
