@@ -39,7 +39,7 @@ cd "$ROOT"
 OUT="${OUT:-out}"
 DIST="${DIST:-dist}"
 SPARSE="${SPARSE:-1}"
-STRIP_MODULES="${STRIP_MODULES:-0}"
+STRIP_MODULES="${STRIP_MODULES:-1}"
 STOCK_MODULE_COUNT="${STOCK_MODULE_COUNT:-0}"
 JOBS="${JOBS:-$(nproc --all)}"
 CLANG_DIR="${CLANG_DIR:-$HOME/clang}"
@@ -96,7 +96,7 @@ fi
 # The on-device layout is /vendor_dlkm/lib/modules/<krel>/*.ko, i.e. the
 # partition root maps to the staging dir root.
 SIZE_KB=$(du -sk "$STAGE" | cut -f1)
-IMG_KB=$(( SIZE_KB + SIZE_KB / 8 + 4096 ))
+IMG_KB=$(( SIZE_KB + SIZE_KB / 10 + 2048 ))
 log "staging ${SIZE_KB} KiB -> ext4 image ${IMG_KB} KiB"
 
 mkdir -p "$DIST"
