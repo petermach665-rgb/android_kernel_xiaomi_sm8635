@@ -57,10 +57,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+
+      - name: Fix script permissions
+        # The Contents API writes every file as 100644, so the exec bit that
+        # build-flavor.sh (and symvers-diff.sh) need is lost on push.
+        run: |
+          set -euo pipefail
+          find scripts -name '*.sh' -exec chmod +x {} \;
+          chmod +x scripts/ci/build-flavor.sh scripts/ci/symvers-diff.sh 2>/dev/null || true
+          ls -l scripts/ci/build-flavor.sh
+
       - name: Install deps
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bc bison flex build-essential libssl-dev libncurses-dev libelf-dev zlib1g-dev pkg-config git curl zip cpio kmod python3 ccache lld llvm dwarves zstd rsync wget
+
       - name: Free disk + swap headroom
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android 2>/dev/null || true
@@ -68,12 +79,14 @@ jobs:
           sudo fallocate -l 12G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=12288
           sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
           free -h && df -h /
+
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.ccache
           key: ccache-nethunter-${{ inputs.mode }}-${{ inputs.flavor }}-${{ inputs.ksu_tag || 'pin' }}-${{ github.sha }}
           restore-keys: |
             ccache-nethunter-
+
       - name: Neutron clang (pinned, checksummed)
         run: |
           set -euo pipefail
@@ -86,6 +99,7 @@ jobs:
           chmod +x antman
           for i in 1 2 3 4; do ./antman --patch=glibc && break; [ "$i" = 4 ] && exit 1; sleep $((i*20)); done
           ./bin/clang --version | head -1
+
       - name: KSUN tag override (optional)
         if: ${{ inputs.ksu_tag != '' }}
         run: |
@@ -95,6 +109,7 @@ jobs:
           sed -i "s|^KSUN_TAG=.*|KSUN_TAG=$KSU|" scripts/ci/pins.env
           grep '^KSUN_TAG=' scripts/ci/pins.env
           git ls-remote --tags https://github.com/KernelSU-Next/KernelSU-Next "refs/tags/$KSU" | grep -q . || { echo "::error::tag $KSU not found upstream"; exit 1; }
+
       - name: Merge NetHunter fragment into gki_defconfig
         run: |
           set -euo pipefail
@@ -106,6 +121,7 @@ jobs:
             grep -vE '^\s*#|^\s*$' arch/arm64/configs/nethunter.fragment
           } >> "$CFG"
           echo "fragment lines appended: $(grep -cE '^CONFIG_' arch/arm64/configs/nethunter.fragment)"
+
       - name: Build BASELINE (selected flavor, KMI gate off)
         if: ${{ inputs.mode == 'baseline' }}
         env:
@@ -119,7 +135,8 @@ jobs:
           mkdir -p /tmp/kmi-aside
           mv -f "scripts/ci/kmi-baseline/${{ inputs.flavor }}.symvers" /tmp/kmi-aside/ 2>/dev/null || true
           echo '::notice::baseline mode - capturing Module.symvers for this tree+flavor+fragment'
-          scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
+          bash scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
+
       - name: Build flavor (KMI gate ON)
         if: ${{ inputs.mode != 'baseline' }}
         env:
@@ -131,7 +148,8 @@ jobs:
           set -euo pipefail
           export CLANG_DIR="$HOME/clang"
           export ZIP_PREFIX="NetHunter"
-          scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
+          bash scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
+
       - name: Config evidence
         if: always()
         run: |
@@ -141,6 +159,7 @@ jobs:
           grep -E '^CONFIG_(SYSVIPC|PID_NS|USER_NS|DEVTMPFS|NF_CT_NETLINK|IP6_NF_NAT|VETH|BRIDGE|OVERLAY_FS|CGROUP_DEVICE|CGROUP_PIDS)=' out/.config 2>/dev/null | sort || echo 'no .config'
           echo '--- KMI gate summary ---'
           cat out/kmi-summary.txt 2>/dev/null || echo 'no kmi-summary'
+
       - name: Upload baseline symvers
         if: ${{ inputs.mode == 'baseline' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -150,6 +169,7 @@ jobs:
             dist/Module.symvers-${{ inputs.flavor }}
             dist/config-${{ inputs.flavor }}
           if-no-files-found: error
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
