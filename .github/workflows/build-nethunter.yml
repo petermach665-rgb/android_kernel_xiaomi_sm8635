@@ -4,6 +4,9 @@ name: NetHunter peridot (SM8635) - KSUN + SUSFS + NetHunter (+DroidSpaces/LXC)
 # The defconfig is the EXACT config of the running crDroid 16.0 kernel
 # (peridot-stock_defconfig, captured from /proc/config.gz), because CRC drift
 # comes from config differences, not just from the source tree.
+# The toolchain is the EXACT AOSP clang the ROM was built with (r563880c,
+# Android build 14054515), because __clang_major__-conditioned macros and
+# genksyms output shift CRCs on struct device / tracepoint symbols otherwise.
 
 on:
   workflow_dispatch:
@@ -46,10 +49,7 @@ env:
   NET_VERSION: "1.0"
   KBUILD_BUILD_USER: build
   KBUILD_BUILD_HOST: localhost
-  NEUTRON_BUILD: "30062026"
-  NEUTRON_SHA256: b473a420d693a4e3bc71b56ec4283c0e3738f87d6ac37fa202bb0be5e0a07521
-  ANTMAN_COMMIT: 0b32c45e3ad83a953b4bc3fd2feb4ad3cc87c1e8
-  ANTMAN_SHA256: deef2dcf11568403c712432ecb7678ef62c3244054ccfee8510ef94a8a8fb04d
+  AOSP_CLANG_URL: "https://github.com/kiy017/clang-r563880c/releases/download/release/linux-x86-f8439f0628d799092dd07df440a6334cab28939c-clang-r563880c.tar.gz"
 
 jobs:
   build:
@@ -62,8 +62,6 @@ jobs:
           fetch-depth: 0
 
       - name: Fix script permissions
-        # The Contents API writes every file as 100644, so the exec bit that
-        # build-flavor.sh (and symvers-diff.sh) need is lost on push.
         run: |
           set -euo pipefail
           find scripts -name '*.sh' -exec chmod +x {} \;
@@ -90,18 +88,20 @@ jobs:
           restore-keys: |
             ccache-nethunter-
 
-      - name: Neutron clang (pinned, checksummed)
+      - name: AOSP clang r563880c (matches ROM toolchain)
         run: |
           set -euo pipefail
-          rm -rf "$HOME/clang"; mkdir -p "$HOME/clang"; cd "$HOME/clang"
-          curl -fsSLO "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/${NEUTRON_BUILD}/neutron-clang-${NEUTRON_BUILD}.tar.zst"
-          echo "${NEUTRON_SHA256}  neutron-clang-${NEUTRON_BUILD}.tar.zst" | sha256sum -c
-          tar -I zstd -xf "neutron-clang-${NEUTRON_BUILD}.tar.zst" && rm -f "neutron-clang-${NEUTRON_BUILD}.tar.zst"
-          curl -fsSLo antman "https://raw.githubusercontent.com/Neutron-Toolchains/antman/${ANTMAN_COMMIT}/antman"
-          echo "${ANTMAN_SHA256}  antman" | sha256sum -c
-          chmod +x antman
-          for i in 1 2 3 4; do ./antman --patch=glibc && break; [ "$i" = 4 ] && exit 1; sleep $((i*20)); done
-          ./bin/clang --version | head -1
+          cd "$HOME"
+          rm -rf clang clang-dl; mkdir -p clang-dl
+          curl -fsSL --retry 5 --retry-delay 15 -o clang-dl/clang.tar.gz "${AOSP_CLANG_URL}"
+          ls -la clang-dl/clang.tar.gz
+          tar -xzf clang-dl/clang.tar.gz -C clang-dl
+          CLANG_BIN=$(find clang-dl -type f -path '*/bin/clang' | head -1)
+          [ -n "$CLANG_BIN" ] || { echo "::error::clang not found in AOSP tarball"; exit 1; }
+          CLANG_ROOT=$(dirname "$(dirname "$CLANG_BIN")")
+          mv "$CLANG_ROOT" "$HOME/clang"
+          rm -rf clang-dl
+          "$HOME/clang/bin/clang" --version | head -1
 
       - name: KSUN tag override (optional)
         if: ${{ inputs.ksu_tag != '' }}
@@ -114,8 +114,6 @@ jobs:
           git ls-remote --tags https://github.com/KernelSU-Next/KernelSU-Next "refs/tags/$KSU" | grep -q . || { echo "::error::tag $KSU not found upstream"; exit 1; }
 
       - name: Merge NetHunter fragment into peridot-stock_defconfig
-        # Applied in BOTH modes - a baseline without the fragment reports the
-        # fragment's own symbols as drift.
         run: |
           set -euo pipefail
           CFG=arch/arm64/configs/peridot-stock_defconfig
@@ -140,7 +138,7 @@ jobs:
           export CLANG_DIR="$HOME/clang"
           mkdir -p /tmp/kmi-aside
           mv -f "scripts/ci/kmi-baseline/${{ inputs.flavor }}.symvers" /tmp/kmi-aside/ 2>/dev/null || true
-          echo '::notice::baseline mode - capturing Module.symvers for this tree+flavor+defconfig+fragment'
+          echo '::notice::baseline mode - capturing Module.symvers for this tree+flavor+defconfig+fragment+toolchain'
           bash scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
 
       - name: Build flavor (KMI gate ON)
@@ -160,12 +158,14 @@ jobs:
       - name: Config evidence
         if: always()
         run: |
+          echo '--- clang used ---'
+          "$HOME/clang/bin/clang" --version | head -1 || true
           echo '--- NetHunter .config ---'
           grep -E '^CONFIG_(CFG80211|MAC80211|ATH9K|RTL8XXXU|RT2800USB|MT7601U|USB_CONFIGFS|USB_F_HID|USB_SERIAL|NFS_FS|TUN)=' out/.config 2>/dev/null | sort || echo 'no .config'
           echo '--- DroidSpaces / namespace .config ---'
           grep -E '^CONFIG_(SYSVIPC|PID_NS|USER_NS|DEVTMPFS|NF_CT_NETLINK|IP6_NF_NAT|VETH|BRIDGE|OVERLAY_FS|CGROUP_DEVICE|CGROUP_PIDS)=' out/.config 2>/dev/null | sort || echo 'no .config'
-          echo '--- QCOM/coresight/mtd (stock parity) ---'
-          grep -cE '^CONFIG_(QCOM|MSM|CORESIGHT|MTD|IPC_LOGGING|MI_)' out/.config 2>/dev/null || echo 0
+          echo '--- CC_VERSION_TEXT ---'
+          grep -E '^CONFIG_CC_VERSION_TEXT' out/.config 2>/dev/null || echo 'no .config'
           echo '--- KMI gate summary ---'
           cat out/kmi-summary.txt 2>/dev/null || echo 'no kmi-summary'
 
@@ -212,7 +212,7 @@ jobs:
           body: |
             NetHunter-flavored peridot kernel (KSUN + SUSFS + NetHunter config).
             ksun-susfs-droidspaces / premium flavors add Docker/LXC container support.
-            Built from peridot-stock_defconfig (the exact crDroid 16.0 config).
+            Built from peridot-stock_defconfig with the AOSP clang r563880c toolchain.
             KMI-gated against this tree's own per-flavor baseline.
             Flash with backup + fastboot recovery ready.
           files: zips/*.zip
