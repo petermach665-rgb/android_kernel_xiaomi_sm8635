@@ -5,8 +5,7 @@ name: NetHunter peridot (SM8635) - KSUN + SUSFS + NetHunter (+DroidSpaces/LXC)
 # (peridot-stock_defconfig, captured from /proc/config.gz), because CRC drift
 # comes from config differences, not just from the source tree.
 # The toolchain is the EXACT AOSP clang the ROM was built with (r563880c,
-# Android build 14054515), because __clang_major__-conditioned macros and
-# genksyms output shift CRCs on struct device / tracepoint symbols otherwise.
+# Android build 14054515).
 
 on:
   workflow_dispatch:
@@ -23,6 +22,7 @@ on:
         default: 'ksun-susfs-droidspaces'
         type: choice
         options:
+          - plain
           - ksun-plain
           - ksun-susfs
           - ksun-susfs-droidspaces
