@@ -17,6 +17,9 @@
 #   OUT        kbuild output dir            (default: out)
 #   DIST       where the .img lands        (default: dist)
 #   SPARSE     1 = run img2simg if present (default: 1)
+#   STRIP_MODULES 1 = strip with llvm-strip (default: 0 - keep symbols,
+#                 matches the stock partition and avoids the host-binutils
+#                 "Unable to recognise the format" failure on aarch64 .ko)
 #   STOCK_MODULE_COUNT  warn if fewer than this many .ko were installed
 #   SKIP_BUILD 1 = only install + pack, do not re-run make
 #
@@ -28,7 +31,7 @@
 set -euo pipefail
 
 FLAVOR="${1:-}"
-[ -n "$FLAVOR" ] || { sed -n '2,30p' "$0"; exit 2; }
+[ -n "$FLAVOR" ] || { sed -n '2,34p' "$0"; exit 2; }
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -36,8 +39,10 @@ cd "$ROOT"
 OUT="${OUT:-out}"
 DIST="${DIST:-dist}"
 SPARSE="${SPARSE:-1}"
+STRIP_MODULES="${STRIP_MODULES:-0}"
 STOCK_MODULE_COUNT="${STOCK_MODULE_COUNT:-0}"
 JOBS="${JOBS:-$(nproc --all)}"
+CLANG_DIR="${CLANG_DIR:-$HOME/clang}"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 die() { echo "::error::$*" >&2; exit 1; }
@@ -54,8 +59,25 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
+  # The host binutils 'strip' cannot read aarch64 relocatable objects, which
+  # makes INSTALL_MOD_STRIP=1 fail with "Unable to recognise the format of the
+  # input file". Either point STRIP at the AOSP llvm-strip or skip stripping.
+  STRIP_ENV=()
+  if [ "$STRIP_MODULES" = 1 ]; then
+    if [ -x "$CLANG_DIR/bin/llvm-strip" ]; then
+      STRIP_ENV=(INSTALL_MOD_STRIP=1 STRIP="$CLANG_DIR/bin/llvm-strip")
+      log "stripping modules with $CLANG_DIR/bin/llvm-strip"
+    else
+      log "[!] llvm-strip not found in $CLANG_DIR/bin - installing modules unstripped"
+    fi
+  else
+    log "installing modules unstripped (STRIP_MODULES=0)"
+  fi
+
   log "modules_install -> $STAGE/lib/modules/$KREL"
-  make -j"$JOBS" O="$OUT" INSTALL_MOD_PATH="$PWD/$STAGE" INSTALL_MOD_STRIP=1 modules_install 2>&1 | tail -20 || die "modules_install failed"
+  make -j"$JOBS" O="$OUT" "${STRIP_ENV[@]}" \
+       INSTALL_MOD_PATH="$PWD/$STAGE" modules_install 2>&1 | tail -20 \
+    || die "modules_install failed"
 fi
 
 MODDIR="$STAGE/lib/modules/$KREL"
