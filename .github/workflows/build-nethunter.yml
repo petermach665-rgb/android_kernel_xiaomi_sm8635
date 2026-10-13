@@ -2,10 +2,19 @@ name: NetHunter peridot (SM8635) - KSUN + SUSFS + NetHunter (+DroidSpaces/LXC)
 
 # KMI gate: baseline MUST come from the SAME tree+flavor+defconfig+fragment+toolchain.
 # The defconfig is the EXACT config of the running crDroid 16.0 kernel
-# (peridot-stock_defconfig, captured from /proc/config.gz), because CRC drift
-# comes from config differences, not just from the source tree.
-# The toolchain is the EXACT AOSP clang the ROM was built with (r563880c,
-# Android build 14054515).
+# (peridot-stock_defconfig, captured from /proc/config.gz).
+# The toolchain is the EXACT AOSP clang the ROM was built with (r563880c).
+#
+# vendor_dlkm: the stock prebuilt /vendor_dlkm modules carry CRCs from the ROM's
+# own build and refuse to load against our Image ("disagrees about version of
+# symbol _dev_err", see manual §12.14). Ticking 'vendor_dlkm' also produces
+# dist/vendor_dlkm-<flavor>.img from the modules this tree builds, so Image and
+# modules come from one tree+config+toolchain. Flash BOTH.
+#
+# NOTE: the produced image is NOT AVB-signed (we have no ROM key). It only boots
+# if the device's vbmeta has verity/verification disabled for vendor_dlkm
+# (fastboot --disable-verity --disable-verification flash vbmeta ...), or if the
+# bootloader is unlocked and does not enforce dm-verity on that partition.
 
 on:
   workflow_dispatch:
@@ -33,6 +42,10 @@ on:
         description: 'KernelSU-Next tag override (e.g. v3.4.1); empty = pins.env default'
         required: false
         default: ''
+      vendor_dlkm:
+        description: 'Also build dist/vendor_dlkm-<flavor>.img (flash with boot)'
+        type: boolean
+        default: false
       release:
         description: 'Publish a prerelease with the zips'
         type: boolean
@@ -65,13 +78,14 @@ jobs:
         run: |
           set -euo pipefail
           find scripts -name '*.sh' -exec chmod +x {} \;
-          chmod +x scripts/ci/build-flavor.sh scripts/ci/symvers-diff.sh 2>/dev/null || true
-          ls -l scripts/ci/build-flavor.sh
+          chmod +x scripts/ci/build-flavor.sh scripts/ci/build-vendor-dlkm.sh scripts/ci/symvers-diff.sh 2>/dev/null || true
+          ls -l scripts/ci/build-flavor.sh scripts/ci/build-vendor-dlkm.sh
 
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bc bison flex build-essential libssl-dev libncurses-dev libelf-dev zlib1g-dev pkg-config git curl zip cpio kmod python3 ccache lld llvm dwarves zstd rsync wget
+          sudo apt-get install -y --no-install-recommends bc bison flex build-essential libssl-dev libncurses-dev libelf-dev zlib1g-dev pkg-config git curl zip cpio kmod python3 ccache lld llvm dwarves zstd rsync wget e2fsprogs
+          sudo apt-get install -y --no-install-recommends android-sdk-libsparse-utils || echo 'img2simg not available, will keep raw ext4'
 
       - name: Free disk + swap headroom
         run: |
@@ -155,6 +169,20 @@ jobs:
           export ZIP_PREFIX="NetHunter"
           bash scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
 
+      - name: Build vendor_dlkm image
+        if: ${{ inputs.vendor_dlkm && inputs.mode != 'baseline' }}
+        env:
+          OUT: out
+          DIST: dist
+          SPARSE: "1"
+          STOCK_MODULE_COUNT: "401"
+        run: |
+          set -euo pipefail
+          export CLANG_DIR="$HOME/clang"
+          export PATH="$HOME/clang/bin:$PATH"
+          echo '::notice::packing the modules built by the previous step into vendor_dlkm.img'
+          bash scripts/ci/build-vendor-dlkm.sh "${{ inputs.flavor }}"
+
       - name: Config evidence
         if: always()
         run: |
@@ -168,6 +196,8 @@ jobs:
           grep -E '^CONFIG_CC_VERSION_TEXT' out/.config 2>/dev/null || echo 'no .config'
           echo '--- KMI gate summary ---'
           cat out/kmi-summary.txt 2>/dev/null || echo 'no kmi-summary'
+          echo '--- vendor_dlkm image ---'
+          ls -la dist/vendor_dlkm-*.img 2>/dev/null || echo 'no vendor_dlkm image'
 
       - name: Upload baseline symvers
         if: ${{ inputs.mode == 'baseline' }}
@@ -188,6 +218,7 @@ jobs:
             dist/Image-*
             dist/Module.symvers-*
             dist/config-*
+            dist/vendor_dlkm-*
             out/build.log
             out/kmi-diff.txt
             out/kmi-summary.txt
@@ -214,5 +245,6 @@ jobs:
             ksun-susfs-droidspaces / premium flavors add Docker/LXC container support.
             Built from peridot-stock_defconfig with the AOSP clang r563880c toolchain.
             KMI-gated against this tree's own per-flavor baseline.
+            If a vendor_dlkm-*.img is present, flash it together with the boot image.
             Flash with backup + fastboot recovery ready.
           files: zips/*.zip
