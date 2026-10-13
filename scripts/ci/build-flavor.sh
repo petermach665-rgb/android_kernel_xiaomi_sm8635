@@ -47,6 +47,7 @@ cd "$ROOT"
 source scripts/ci/pins.env
 
 OUT="${OUT:-out}"
+DEFCONFIG="${DEFCONFIG:-gki_defconfig}"
 DIST="${DIST:-dist}"
 JOBS="${JOBS:-$(nproc --all)}"
 CLANG_DIR="${CLANG_DIR:-$HOME/clang}"
@@ -200,7 +201,7 @@ fi
 
 # ---- 4. configure ------------------------------------------------------------------------
 C=./scripts/config
-make -s -j"$JOBS" O="$OUT" gki_defconfig
+make -s -j"$JOBS" O="$OUT" "$DEFCONFIG"
 CFG="$OUT/.config"
 if [ "$ROOT_ENGINE" != none ]; then $C --file "$CFG" -e KSU; fi
 if [ "$KPM" = 1 ]; then
