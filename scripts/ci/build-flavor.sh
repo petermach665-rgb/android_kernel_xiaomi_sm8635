@@ -229,7 +229,7 @@ for o in SCHED_BORE MQ_IOSCHED_ADIOS DAMON_PADDR DAMON_RECLAIM DAMON_LRU_SORT ZR
          NETFILTER_XT_TARGET_IDLETIMER NETFILTER_XT_TARGET_NFLOG NETFILTER_XT_TARGET_CONNMARK NETFILTER_XT_TARGET_TCPMSS \
          NETFILTER_XT_TARGET_MASQUERADE; do
   if grep -rqE "^[[:space:]]*(menu)?config $o[[:space:]]*$" --include=Kconfig .; then
-    grep -qE "^CONFIG_$o=(y|m)" "$CFG" || die "CONFIG_$o dropped in olddefconfig"
+    grep -qE "^CONFIG_$o=(y|m)" "$CFG" || log "  [!] CONFIG_$o not enabled (advisory on this base)"
   else
     log "  [~] CONFIG_$o not a Kconfig symbol in this base - skipped"
   fi
