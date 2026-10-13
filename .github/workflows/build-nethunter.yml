@@ -1,6 +1,9 @@
 name: NetHunter peridot (SM8635) - KSUN + SUSFS + NetHunter (+DroidSpaces/LXC)
 
-# KMI gate: baseline MUST come from the SAME tree+flavor+fragment+toolchain.
+# KMI gate: baseline MUST come from the SAME tree+flavor+defconfig+fragment+toolchain.
+# The defconfig is the EXACT config of the running crDroid 16.0 kernel
+# (peridot-stock_defconfig, captured from /proc/config.gz), because CRC drift
+# comes from config differences, not just from the source tree.
 
 on:
   workflow_dispatch:
@@ -110,10 +113,12 @@ jobs:
           grep '^KSUN_TAG=' scripts/ci/pins.env
           git ls-remote --tags https://github.com/KernelSU-Next/KernelSU-Next "refs/tags/$KSU" | grep -q . || { echo "::error::tag $KSU not found upstream"; exit 1; }
 
-      - name: Merge NetHunter fragment into gki_defconfig
+      - name: Merge NetHunter fragment into peridot-stock_defconfig
+        # Applied in BOTH modes - a baseline without the fragment reports the
+        # fragment's own symbols as drift.
         run: |
           set -euo pipefail
-          CFG=arch/arm64/configs/gki_defconfig
+          CFG=arch/arm64/configs/peridot-stock_defconfig
           cp "$CFG" "$CFG.orig"
           {
             echo ''
@@ -129,12 +134,13 @@ jobs:
           ALLOW_DIRTY: "1"
           ALLOW_OTHER_CLANG: "1"
           KMI_STRICT: "0"
+          DEFCONFIG: peridot-stock_defconfig
         run: |
           set -euo pipefail
           export CLANG_DIR="$HOME/clang"
           mkdir -p /tmp/kmi-aside
           mv -f "scripts/ci/kmi-baseline/${{ inputs.flavor }}.symvers" /tmp/kmi-aside/ 2>/dev/null || true
-          echo '::notice::baseline mode - capturing Module.symvers for this tree+flavor+fragment'
+          echo '::notice::baseline mode - capturing Module.symvers for this tree+flavor+defconfig+fragment'
           bash scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
 
       - name: Build flavor (KMI gate ON)
@@ -144,6 +150,7 @@ jobs:
           ALLOW_DIRTY: "1"
           ALLOW_OTHER_CLANG: "1"
           KMI_STRICT: "1"
+          DEFCONFIG: peridot-stock_defconfig
         run: |
           set -euo pipefail
           export CLANG_DIR="$HOME/clang"
@@ -157,6 +164,8 @@ jobs:
           grep -E '^CONFIG_(CFG80211|MAC80211|ATH9K|RTL8XXXU|RT2800USB|MT7601U|USB_CONFIGFS|USB_F_HID|USB_SERIAL|NFS_FS|TUN)=' out/.config 2>/dev/null | sort || echo 'no .config'
           echo '--- DroidSpaces / namespace .config ---'
           grep -E '^CONFIG_(SYSVIPC|PID_NS|USER_NS|DEVTMPFS|NF_CT_NETLINK|IP6_NF_NAT|VETH|BRIDGE|OVERLAY_FS|CGROUP_DEVICE|CGROUP_PIDS)=' out/.config 2>/dev/null | sort || echo 'no .config'
+          echo '--- QCOM/coresight/mtd (stock parity) ---'
+          grep -cE '^CONFIG_(QCOM|MSM|CORESIGHT|MTD|IPC_LOGGING|MI_)' out/.config 2>/dev/null || echo 0
           echo '--- KMI gate summary ---'
           cat out/kmi-summary.txt 2>/dev/null || echo 'no kmi-summary'
 
@@ -203,6 +212,7 @@ jobs:
           body: |
             NetHunter-flavored peridot kernel (KSUN + SUSFS + NetHunter config).
             ksun-susfs-droidspaces / premium flavors add Docker/LXC container support.
+            Built from peridot-stock_defconfig (the exact crDroid 16.0 config).
             KMI-gated against this tree's own per-flavor baseline.
             Flash with backup + fastboot recovery ready.
           files: zips/*.zip
