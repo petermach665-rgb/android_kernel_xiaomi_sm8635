@@ -1,0 +1,188 @@
+name: NetHunter peridot (SM8635) - KSUN + SUSFS + NetHunter (+DroidSpaces/LXC)
+
+# KMI gate: baseline MUST come from the SAME tree+flavor+fragment+toolchain.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'baseline = build selected flavor to capture its KMI symvers'
+        required: true
+        default: 'build'
+        type: choice
+        options: [build, baseline]
+      flavor:
+        description: 'Root flavor from scripts/ci/build-flavor.sh'
+        required: true
+        default: 'ksun-susfs-droidspaces'
+        type: choice
+        options:
+          - ksun-plain
+          - ksun-susfs
+          - ksun-susfs-droidspaces
+          - sukisu-susfs
+          - resukisu-susfs
+          - premium
+      ksu_tag:
+        description: 'KernelSU-Next tag override (e.g. v3.4.1); empty = pins.env default'
+        required: false
+        default: ''
+      release:
+        description: 'Publish a prerelease with the zips'
+        type: boolean
+        default: false
+
+concurrency:
+  group: nethunter-${{ github.ref }}-${{ inputs.mode }}-${{ inputs.flavor }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  NET_VERSION: "1.0"
+  KBUILD_BUILD_USER: build
+  KBUILD_BUILD_HOST: localhost
+  NEUTRON_BUILD: "30062026"
+  NEUTRON_SHA256: b473a420d693a4e3bc71b56ec4283c0e3738f87d6ac37fa202bb0be5e0a07521
+  ANTMAN_COMMIT: 0b32c45e3ad83a953b4bc3fd2feb4ad3cc87c1e8
+  ANTMAN_SHA256: deef2dcf11568403c712432ecb7678ef62c3244054ccfee8510ef94a8a8fb04d
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    name: nethunter-${{ inputs.mode }}-${{ inputs.flavor }}-${{ inputs.ksu_tag || 'pin' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison flex build-essential libssl-dev libncurses-dev libelf-dev zlib1g-dev pkg-config git curl zip cpio kmod python3 ccache lld llvm dwarves zstd rsync wget
+      - name: Free disk + swap headroom
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android 2>/dev/null || true
+          sudo swapoff -a || true
+          sudo fallocate -l 12G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=12288
+          sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+          free -h && df -h /
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.ccache
+          key: ccache-nethunter-${{ inputs.mode }}-${{ inputs.flavor }}-${{ inputs.ksu_tag || 'pin' }}-${{ github.sha }}
+          restore-keys: |
+            ccache-nethunter-
+      - name: Neutron clang (pinned, checksummed)
+        run: |
+          set -euo pipefail
+          rm -rf "$HOME/clang"; mkdir -p "$HOME/clang"; cd "$HOME/clang"
+          curl -fsSLO "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/${NEUTRON_BUILD}/neutron-clang-${NEUTRON_BUILD}.tar.zst"
+          echo "${NEUTRON_SHA256}  neutron-clang-${NEUTRON_BUILD}.tar.zst" | sha256sum -c
+          tar -I zstd -xf "neutron-clang-${NEUTRON_BUILD}.tar.zst" && rm -f "neutron-clang-${NEUTRON_BUILD}.tar.zst"
+          curl -fsSLo antman "https://raw.githubusercontent.com/Neutron-Toolchains/antman/${ANTMAN_COMMIT}/antman"
+          echo "${ANTMAN_SHA256}  antman" | sha256sum -c
+          chmod +x antman
+          for i in 1 2 3 4; do ./antman --patch=glibc && break; [ "$i" = 4 ] && exit 1; sleep $((i*20)); done
+          ./bin/clang --version | head -1
+      - name: KSUN tag override (optional)
+        if: ${{ inputs.ksu_tag != '' }}
+        run: |
+          set -euo pipefail
+          KSU="${{ inputs.ksu_tag }}"
+          echo "Overriding KSUN_TAG -> $KSU"
+          sed -i "s|^KSUN_TAG=.*|KSUN_TAG=$KSU|" scripts/ci/pins.env
+          grep '^KSUN_TAG=' scripts/ci/pins.env
+          git ls-remote --tags https://github.com/KernelSU-Next/KernelSU-Next "refs/tags/$KSU" | grep -q . || { echo "::error::tag $KSU not found upstream"; exit 1; }
+      - name: Merge NetHunter fragment into gki_defconfig
+        run: |
+          set -euo pipefail
+          CFG=arch/arm64/configs/gki_defconfig
+          cp "$CFG" "$CFG.orig"
+          {
+            echo ''
+            echo '# === Kali NetHunter fragment (auto-merged by CI) ==='
+            grep -vE '^\s*#|^\s*$' arch/arm64/configs/nethunter.fragment
+          } >> "$CFG"
+          echo "fragment lines appended: $(grep -cE '^CONFIG_' arch/arm64/configs/nethunter.fragment)"
+      - name: Build BASELINE (selected flavor, KMI gate off)
+        if: ${{ inputs.mode == 'baseline' }}
+        env:
+          ZIP_VERSION: ${{ env.NET_VERSION }}
+          ALLOW_DIRTY: "1"
+          ALLOW_OTHER_CLANG: "1"
+          KMI_STRICT: "0"
+        run: |
+          set -euo pipefail
+          export CLANG_DIR="$HOME/clang"
+          mkdir -p /tmp/kmi-aside
+          mv -f "scripts/ci/kmi-baseline/${{ inputs.flavor }}.symvers" /tmp/kmi-aside/ 2>/dev/null || true
+          echo '::notice::baseline mode - capturing Module.symvers for this tree+flavor+fragment'
+          scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
+      - name: Build flavor (KMI gate ON)
+        if: ${{ inputs.mode != 'baseline' }}
+        env:
+          ZIP_VERSION: ${{ env.NET_VERSION }}
+          ALLOW_DIRTY: "1"
+          ALLOW_OTHER_CLANG: "1"
+          KMI_STRICT: "1"
+        run: |
+          set -euo pipefail
+          export CLANG_DIR="$HOME/clang"
+          export ZIP_PREFIX="NetHunter"
+          scripts/ci/build-flavor.sh "${{ inputs.flavor }}"
+      - name: Config evidence
+        if: always()
+        run: |
+          echo '--- NetHunter .config ---'
+          grep -E '^CONFIG_(CFG80211|MAC80211|ATH9K|RTL8XXXU|RT2800USB|MT7601U|USB_CONFIGFS|USB_F_HID|USB_SERIAL|NFS_FS|TUN)=' out/.config 2>/dev/null | sort || echo 'no .config'
+          echo '--- DroidSpaces / namespace .config ---'
+          grep -E '^CONFIG_(SYSVIPC|PID_NS|USER_NS|DEVTMPFS|NF_CT_NETLINK|IP6_NF_NAT|VETH|BRIDGE|OVERLAY_FS|CGROUP_DEVICE|CGROUP_PIDS)=' out/.config 2>/dev/null | sort || echo 'no .config'
+          echo '--- KMI gate summary ---'
+          cat out/kmi-summary.txt 2>/dev/null || echo 'no kmi-summary'
+      - name: Upload baseline symvers
+        if: ${{ inputs.mode == 'baseline' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kmi-baseline-${{ inputs.flavor }}
+          path: |
+            dist/Module.symvers-${{ inputs.flavor }}
+            dist/config-${{ inputs.flavor }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: nethunter-kernel
+          path: |
+            dist/*.zip
+            dist/Image-*
+            dist/Module.symvers-*
+            dist/config-*
+            out/build.log
+            out/kmi-diff.txt
+            out/kmi-summary.txt
+          if-no-files-found: warn
+
+  release:
+    needs: build
+    if: success() && github.event_name == 'workflow_dispatch' && inputs.mode != 'baseline' && inputs.release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: nethunter-kernel
+          path: zips
+      - run: ls -lh zips/
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: nethunter-${{ env.NET_VERSION }}-${{ github.run_number }}
+          prerelease: true
+          make_latest: false
+          name: NetHunter peridot ${{ env.NET_VERSION }} build #${{ github.run_number }}
+          body: |
+            NetHunter-flavored peridot kernel (KSUN + SUSFS + NetHunter config).
+            ksun-susfs-droidspaces / premium flavors add Docker/LXC container support.
+            KMI-gated against this tree's own per-flavor baseline.
+            Flash with backup + fastboot recovery ready.
+          files: zips/*.zip
