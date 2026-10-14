@@ -186,6 +186,34 @@ open(f, 'w', encoding='utf-8').write(code)
 print("  [+] added susfs_init() + susfs_ksu_resolve_sids() calls in kernelsu_init")
 PY
 
+# --- 3b) pkg_observer.c: disable throne hunt (Duck Detector mitigation) ---
+# Duck Detector rewrites /data/system/packages.list via setMimeGroup; KSUN's
+# fsnotify observer reacts by calling track_throne() -> search_manager("/data/app", 2),
+# which opens + iterates the detector's own package directory. The detector watches
+# that directory via inotify and reports "KernelSU throne hunt: open=2 access=2" as a
+# Native Root runtime signal. Neuter the reaction: keep the fsnotify watch in place
+# (harmless) but drop the track_throne() call so no /data/app traversal happens.
+# Side effect: KSU cannot auto-discover a *newly installed* manager on next boot; an
+# already-registered manager keeps working (its appid is persisted).
+python3 - "$KSUN_DIR/kernel/manager/pkg_observer.c" <<'PY'
+import sys
+f = sys.argv[1]
+code = open(f, encoding="utf-8").read()
+if 'TRACK_THRONE_DISABLED' in code:
+    print("  [=] pkg_observer.c already patched (TRACK_THRONE_DISABLED present)")
+    sys.exit(0)
+anchor = "        track_throne(false);"
+assert anchor in code, "track_throne(false) call not found in pkg_observer.c"
+replacement = (
+    "        /* TRACK_THRONE_DISABLED (Nexus crdroid16 patch): throne hunt is a Duck\n"
+    "         * Detector stimulus (setMimeGroup -> packages.list write -> search_manager).\n"
+    "         * Do not call track_throne() here; the fsnotify watch is kept for parity. */"
+)
+code = code.replace(anchor, replacement, 1)
+open(f, "w", encoding="utf-8").write(code)
+print("  [+] pkg_observer.c: track_throne() reaction disabled")
+PY
+
 echo "[*] === KERNEL SIDE (peridot) ==="
 
 # --- 4) copy susfs fs-side sources + headers ---
