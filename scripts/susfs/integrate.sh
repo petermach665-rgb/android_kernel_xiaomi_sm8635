@@ -165,7 +165,9 @@ glue = ("\n#ifdef CONFIG_KSU_SUSFS\n"
 # (kernel/feature/sucompat.c). If that file is present, drop our no-op stub
 # so the link does not fail with "duplicate symbol".
 import os as _os
-if _os.path.exists(_os.path.join(sys.argv[1], 'kernel', 'feature', 'sucompat.c')):
+# sys.argv[1] is the selinux.c path, so the KSUN root is three levels up.
+_kroot = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(f))))
+if _os.path.exists(_os.path.join(_kroot, 'kernel', 'feature', 'sucompat.c')):
     glue = glue.replace(
         'int ksu_handle_execveat_sucompat(int *fd, void *filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n',
         '/* ksu_handle_execveat_sucompat provided by KSUN v3.4.1 itself */\n')
