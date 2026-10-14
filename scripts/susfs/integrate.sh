@@ -246,6 +246,27 @@ open(f, "w", encoding="utf-8").write(new_code)
 print("  [+] throne_tracker.c: search_manager() call disabled")
 PY
 
+# --- 3d) observer: disable ksu_observer_init() at both call sites ---
+# Report 10 (kernel gf8a0d2fad32f): Duck Detector still reports "KernelSU
+# throne hunt" although 3b+3c are applied and dmesg counters (Searching
+# manager / Found new base.apk / manager pkg) are all 0. FD diagnostic
+# showed the only holders on the detector package dir are the detector's
+# own processes -> the signal is a FALSE POSITIVE for KSU. This patch
+# removes KSU from the equation entirely (no fsnotify group, no /data/system
+# watch, no pkg_observer events).
+python3 - "$KSUN_DIR/kernel/core/init.c" "$KSUN_DIR/kernel/runtime/boot_event.c" <<'PY'
+import sys
+for f in sys.argv[1:]:
+    s = open(f).read()
+    if 'KSU_OBSERVER_DISABLED' in s:
+        print("  [=] %s already patched" % f)
+        continue
+    n = s.count('ksu_observer_init();')
+    assert n == 1, "%s: expected 1 call, found %d" % (f, n)
+    s = s.replace('ksu_observer_init();', '/* KSU_OBSERVER_DISABLED (Nexus 3d) */')
+    open(f, 'w').write(s)
+    print("  [+] %s: ksu_observer_init() disabled" % f)
+PY
 echo "[*] === KERNEL SIDE (peridot) ==="
 
 # --- 4) copy susfs fs-side sources + headers ---
