@@ -214,6 +214,38 @@ open(f, "w", encoding="utf-8").write(code)
 print("  [+] pkg_observer.c: track_throne() reaction disabled")
 PY
 
+# --- 3c) throne_tracker.c: disable search_manager("/data/app") ---
+# Duck Detector watches its own /data/app package dir via inotify. ANY traversal
+# of /data/app from KSU fires that watch and is reported as "KernelSU throne hunt".
+# pkg_observer.c (3b) removed the fsnotify stimulus reaction, but init.c:167 still
+# calls track_throne(false) directly during kernelsu_init(); when manager_exist is
+# false this falls through to search_manager("/data/app", 2). Patch the ONE place
+# that actually walks /data/app so all callers (init, pkg_observer, boot_event) are
+# covered. Side effect: KSU cannot auto-discover a *newly installed* manager at
+# boot; an already-registered manager keeps working (appid is persisted in
+# /data/adb/ksu/.allowlist).
+python3 - "$KSUN_DIR/kernel/manager/throne_tracker.c" <<'PY'
+import sys, re
+f = sys.argv[1]
+code = open(f, encoding="utf-8").read()
+if 'SEARCH_MANAGER_DISABLED' in code:
+    print("  [=] throne_tracker.c already patched (SEARCH_MANAGER_DISABLED present)")
+    sys.exit(0)
+pat = re.compile(r'[ \t]*search_manager\("/data/app", 2, &uid_list\);')
+replacement = (
+    '/* SEARCH_MANAGER_DISABLED (Nexus crdroid16 patch): Duck Detector\n'
+    '\t\t * watches its own /data/app package dir via inotify. Any traversal\n'
+    '\t\t * of /data/app from KSU fires that watch and is reported as\n'
+    '\t\t * "KernelSU throne hunt". Manager appid is persistent\n'
+    '\t\t * (/data/adb/ksu/.allowlist), so an already-registered manager\n'
+    '\t\t * keeps working; only fresh auto-discovery is lost. */'
+)
+new_code, n = pat.subn(lambda m: replacement, code, count=1)
+assert n == 1, "search_manager('/data/app', ...) call not found in throne_tracker.c"
+open(f, "w", encoding="utf-8").write(new_code)
+print("  [+] throne_tracker.c: search_manager() call disabled")
+PY
+
 echo "[*] === KERNEL SIDE (peridot) ==="
 
 # --- 4) copy susfs fs-side sources + headers ---
