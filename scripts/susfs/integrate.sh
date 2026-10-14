@@ -161,9 +161,6 @@ glue = ("\n#ifdef CONFIG_KSU_SUSFS\n"
         "struct selinux_state fake_state;\n"
         "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\n"
         "#endif // CONFIG_KSU_SUSFS\n")
-# v3.4.1 moved execveat-sucompat into the driver itself
-# (kernel/feature/sucompat.c). If that file is present, drop our no-op stub
-# so the link does not fail with "duplicate symbol".
 if 'susfs_is_current_ksu_domain' not in code:
     code = code.rstrip('\n') + '\n' + glue
 open(f, 'w', encoding='utf-8').write(code)
