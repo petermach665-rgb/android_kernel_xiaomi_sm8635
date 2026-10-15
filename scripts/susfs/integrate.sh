@@ -275,4 +275,64 @@ done
 
 REJ="$(find . -name '*.rej' 2>/dev/null || true)"
 if [ -n "$REJ" ]; then echo "[!] REJECTS:"; for r in $REJ; do echo "== $r =="; cat "$r"; done; exit 1; fi
+# --- 3e) services.c: force Android route-netlink boundaries ---
+# Duck Detector's "permission boundary check" reads RTM_GETLINK and RTM_GETNEIGH
+# from the app domain and receives the physical wlan0 MAC and the LAN neighbour
+# table. AOSP policy is meant to deny both for untrusted_app; CTS checks it.
+#
+# Mechanism, all in security/selinux:
+#   policydb_read()  sets p->android_netlink_route / _getneigh from the policy
+#                    config word (byte offset 20 of the blob).
+#   services.c       copies those into selinux_state.
+#   nlmsgtab.c       selinux_nlmsg_init() then maps:
+#                      flag=1 -> RTM_GETLINK  = nlmsg_readpriv   (app lacks it)
+#                      flag=0 -> RTM_GETLINK  = nlmsg_read       (app HAS it)
+#                    and likewise RTM_GETNEIGH/RTM_GETNEIGHTBL:
+#                      nlmsg_getneigh vs nlmsg_read.
+#
+# Measured on device: the crDroid policy ships config word = 1 (MLS only, both
+# Android netlink bits clear), so both flags land at 0 and every app can read
+# the MAC and ARP. KernelSU's own fixup in sepolicy.c ORs the bits into an
+# intermediate buffer during early init, which does not survive the final
+# policy load.
+#
+# Fix: force both flags at every policy load. Exactly three message types
+# change mapping (RTM_GETLINK, RTM_GETNEIGH, RTM_GETNEIGHTBL); RTM_GETADDR,
+# RTM_GETROUTE and RTM_GETRULE keep nlmsg_read, so getifaddrs() and route
+# enumeration keep working. su/ksu are untouched: KernelSU gives
+# KERNEL_SU_DOMAIN "allow ALL ALL ALL" plus permissive, so root tooling keeps
+# full netlink access. Verified: this tree's 50_ patch does not touch
+# security/selinux/ss/services.c, so there is no patch conflict.
+python3 - "$KROOT/security/selinux/ss/services.c" <<'PY'
+import sys
+
+f = sys.argv[1]
+code = open(f, encoding="utf-8").read()
+
+if 'NETLINK_BOUNDARY_FIX' in code:
+    print("  [=] services.c already patched (NETLINK_BOUNDARY_FIX present)")
+    sys.exit(0)
+
+old = ("\tstate->android_netlink_route = p->android_netlink_route;\n"
+       "\tstate->android_netlink_getneigh = p->android_netlink_getneigh;\n")
+assert old in code, "services.c android_netlink assignment not found"
+
+new = ("\t/* NETLINK_BOUNDARY_FIX (Nexus crdroid16 patch): the shipped policy\n"
+       "\t * omits the Android route-netlink config bits, which maps RTM_GETLINK\n"
+       "\t * and RTM_GETNEIGH to nlmsg_read -- a permission untrusted_app holds --\n"
+       "\t * leaking the physical MAC and the ARP/neighbour table to every app.\n"
+       "\t * Force the restricted mapping on every policy load. Only those three\n"
+       "\t * message types are affected; RTM_GETADDR/GETROUTE/GETRULE keep\n"
+       "\t * nlmsg_read, and su/ksu keep full access via KERNEL_SU_DOMAIN. */\n"
+       "\tp->android_netlink_route = 1;\n"
+       "\tp->android_netlink_getneigh = 1;\n"
+       "\tstate->android_netlink_route = p->android_netlink_route;\n"
+       "\tstate->android_netlink_getneigh = p->android_netlink_getneigh;\n")
+
+code = code.replace(old, new, 1)
+assert code.count("p->android_netlink_route = 1;") == 1
+open(f, "w", encoding="utf-8").write(code)
+print("  [+] services.c: netlink boundary forced (policydb + state)")
+PY
+
 echo "[*] integration complete, no rejects"
