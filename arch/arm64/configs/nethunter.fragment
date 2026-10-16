@@ -17,10 +17,15 @@ CONFIG_WLAN_VENDOR_MEDIATEK=y
 CONFIG_MT7601U=m
 
 # USB gadget (HID attack, serial)
-CONFIG_USB_CONFIGFS=m
-CONFIG_USB_F_HID=m
+# Keep the gadget core at its stock values. The stock defconfig ships
+# USB_CONFIGFS=y / USB_F_HID=y / USB_LIBCOMPOSITE=y. Forcing =m downgrades
+# libcomposite to a module, and usb_f_accessory <-> libcomposite then form a
+# module dependency cycle: depmod aborts with "Cycle detected".
+CONFIG_USB_CONFIGFS=y
+CONFIG_USB_F_HID=y
 CONFIG_USB_SERIAL=m
 
 # Networking
-CONFIG_TUN=m
+# TUN is =y in the stock defconfig; keep it built-in rather than downgrading.
+CONFIG_TUN=y
 CONFIG_NFS_FS=m
