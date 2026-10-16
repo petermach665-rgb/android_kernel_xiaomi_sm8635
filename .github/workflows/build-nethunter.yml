@@ -62,10 +62,7 @@ env:
   NET_VERSION: "1.0"
   KBUILD_BUILD_USER: build
   KBUILD_BUILD_HOST: localhost
-  # This is the real AOSP prebuilts archive, pinned to the repository commit
-  # containing clang-r563880.  The archive metadata reports Android clang
-  # 21.0.0 based on r563880; the brief's trailing "c" is not its AOSP path.
-  AOSP_CLANG_URL: "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/777bc2c71e25056be0f39f6d77a3c8d1cd6a839e/clang-r563880.tar.gz"
+  AOSP_CLANG_URL: "https://github.com/kiy017/clang-r563880c/releases/download/release/linux-x86-f8439f0628d799092dd07df440a6334cab28939c-clang-r563880c.tar.gz"
 
 jobs:
   build:
@@ -105,19 +102,19 @@ jobs:
           restore-keys: |
             ccache-nethunter-
 
-      - name: AOSP clang r563880 (matches verified ROM metadata)
+      - name: AOSP clang r563880c (matches ROM toolchain)
         run: |
           set -euo pipefail
           cd "$HOME"
-          rm -rf clang clang-dl clang-unpack; mkdir -p clang-dl clang-unpack
+          rm -rf clang clang-dl; mkdir -p clang-dl
           curl -fsSL --retry 5 --retry-delay 15 -o clang-dl/clang.tar.gz "${AOSP_CLANG_URL}"
           ls -la clang-dl/clang.tar.gz
-          tar -xzf clang-dl/clang.tar.gz -C clang-unpack
-          CLANG_BIN=$(find clang-unpack -type f -path '*/bin/clang' -print -quit)
+          tar -xzf clang-dl/clang.tar.gz -C clang-dl
+          CLANG_BIN=$(find clang-dl -type f -path '*/bin/clang' | head -1)
           [ -n "$CLANG_BIN" ] || { echo "::error::clang not found in AOSP tarball"; exit 1; }
           CLANG_ROOT=$(dirname "$(dirname "$CLANG_BIN")")
           mv "$CLANG_ROOT" "$HOME/clang"
-          rm -rf clang-dl clang-unpack
+          rm -rf clang-dl
           "$HOME/clang/bin/clang" --version | head -1
 
       - name: KSUN tag override (optional)

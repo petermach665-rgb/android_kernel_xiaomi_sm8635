@@ -1,31 +1,41 @@
-# Kali NetHunter fragment for peridot (SM8635), appended to the verified
-# peridot-stock_defconfig by CI. Keep this fragment separate from the stock
-# capture: it is the only intentional configuration delta.
+# ============================================================
+# Kali NetHunter config fragment - peridot (SM8635) GKI 6.1
+#
+# MINIMAL: external Wi-Fi adapters only, all as loadable MODULES.
+#
+# Why minimal: the first fragment also enabled BRIDGE/VETH/TUN/
+# BT/CAN/NFS/CIFS/netfilter. Those shifted CRCs of core exported
+# symbols in net/core (__dev_queue_xmit, __alloc_skb,
+# __dev_get_by_name, __cgroup_bpf_run_filter_*) which broke the
+# prebuilt stock vendor_dlkm modules -> bootloop (2026-10-11).
+#
+# USB HID gadget (Rucky/BadUSB) is ALREADY =y in gki_defconfig,
+# so it is not repeated here. dmesg/USB serial also untouched.
+# ============================================================
 
-# WiFi injection
+# --- 802.11 core (modules, do not touch core CRCs) ---
 CONFIG_CFG80211=m
+CONFIG_CFG80211_WEXT=y
 CONFIG_MAC80211=m
+CONFIG_MAC80211_MESH=y
+CONFIG_WLAN=y
+
+# --- Atheros USB (AR9271/AR7010 etc.) ---
 CONFIG_WLAN_VENDOR_ATH=y
-CONFIG_ATH9K=m
+CONFIG_ATH_COMMON=m
+CONFIG_ATH9K_HW=m
+CONFIG_ATH9K_COMMON=m
 CONFIG_ATH9K_HTC=m
+
+# --- Realtek USB ---
 CONFIG_WLAN_VENDOR_REALTEK=y
 CONFIG_RTL8XXXU=m
+
+# --- Ralink USB ---
 CONFIG_WLAN_VENDOR_RALINK=y
 CONFIG_RT2X00=m
 CONFIG_RT2800USB=m
+
+# --- MediaTek USB ---
 CONFIG_WLAN_VENDOR_MEDIATEK=y
 CONFIG_MT7601U=m
-
-# USB gadget (HID attack, serial)
-# Keep the gadget core at its stock values. The stock defconfig ships
-# USB_CONFIGFS=y / USB_F_HID=y / USB_LIBCOMPOSITE=y. Forcing =m downgrades
-# libcomposite to a module, and usb_f_accessory <-> libcomposite then form a
-# module dependency cycle: depmod aborts with "Cycle detected".
-CONFIG_USB_CONFIGFS=y
-CONFIG_USB_F_HID=y
-CONFIG_USB_SERIAL=m
-
-# Networking
-# TUN is =y in the stock defconfig; keep it built-in rather than downgrading.
-CONFIG_TUN=y
-CONFIG_NFS_FS=m

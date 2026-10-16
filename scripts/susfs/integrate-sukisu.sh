@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# SukiSU-Ultra + SUSFS v2.3.0 integration (hand-authored)
+# KernelSU-Next v3.3.0 + SUSFS v2.2.0 integration (hand-authored)
 # Driver side: graft susfs CMD dispatch into KSUN's existing reboot kprobe.
 # Kernel side: apply susfs fs-side (50_) minus the conflicting setresuid hunk.
 set -euo pipefail
 
-KSUN_DIR="${1:?SukiSU dir}"    # SukiSU-Ultra checkout
-S4K_DIR="${2:?susfs4ksu dir}"  # susfs4ksu gki-android14-6.1 (v2.3.0)
+KSUN_DIR="${1:?KSUN dir}"      # KernelSU-Next checkout (v3.3.0)
+S4K_DIR="${2:?susfs4ksu dir}"  # susfs4ksu gki-android14-6.1 (v2.2.0)
 KROOT="${3:?kernel root}"      # the peridot kernel tree
 
 P10="$S4K_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
@@ -104,7 +104,7 @@ PY
 # --- 2b) selinux.c: define susfs_is_current_ksu_domain() ---
 # The fs-side (fs/namespace.c, fs/proc_namespace.c) externs this but defines it
 # nowhere. Raw-KSU defines it in its driver via a bespoke susfs_ksu_sid. KSUN
-# SukiSU's current tree caches the ksu-domain SID, so we delegate to is_ksu_domain().
+# v3.3.0 already caches the ksu-domain SID, so we just delegate to is_ksu_domain().
 python3 - "$KSUN_DIR/kernel/selinux/selinux.c" <<'PY'
 import sys
 f = sys.argv[1]
@@ -115,8 +115,7 @@ assert 'security_secctx_to_secid(' in code, "KSUN security_secctx_to_secid usage
 # susfs_ksu_sid/susfs_priv_app_sid [avc.c denial-log spoofing]. Port raw-KSU's idea:
 # define the globals and resolve them via security_secctx_to_secid at init.
 glue = ("\n#ifdef CONFIG_KSU_SUSFS\n"
-         "#include <linux/jump_label.h>  /* DEFINE_STATIC_KEY_TRUE */\n"
-         "#include <linux/namei.h>       /* struct filename */\n"
+        "#include <linux/jump_label.h>  /* DEFINE_STATIC_KEY_TRUE */\n"
         "/* --- susfs glue (hand-port) --- */\n"
         "u32 susfs_ksu_sid __read_mostly = 0;      /* consumed by security/selinux/avc.c */\n"
         "u32 susfs_priv_app_sid __read_mostly = 0;  /* consumed by security/selinux/avc.c */\n"
@@ -149,18 +148,17 @@ glue = ("\n#ifdef CONFIG_KSU_SUSFS\n"
         "}\n"
         "\n"
         "/* Vestigial weishu manual-hook shims. susfs's 50_ patch adds these inline\n"
-         " * su-hooks in fs/{stat,exec,open}.c; SukiSU keeps its own hook paths, so they\n"
+        " * su-hooks in fs/{stat,exec,open}.c; KSUN v3.3.0 uses kprobe hooks, so they\n"
         " * are no-ops here (return 0 = 'not handled, proceed'). susfs's OWN enforcement\n"
         " * (susfs_sus_kstat_spoof_*, sus_path/mount) is separate and unaffected. */\n"
-         "int __attribute__((weak)) ksu_handle_stat(int *dfd, struct filename **filename, int *flags) { return 0; }\n"
-         "void __attribute__((weak)) ksu_handle_vfs_fstat(int fd, void *kstat_size_ptr) { }\n"
-         "int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
-         "int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
-         "int __attribute__((weak)) ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *flags) { return 0; }\n"
-         "int __attribute__((weak)) ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags, int *retval) { return 0; }\n"
+        "int ksu_handle_stat(int *dfd, void *filename, int *flags) { return 0; }\n"
+        "void ksu_handle_vfs_fstat(int fd, void *kstat_size_ptr) { }\n"
+        "int ksu_handle_execveat(int *fd, void *filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
+        "int ksu_handle_execveat_sucompat(int *fd, void *filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
+        "int ksu_handle_faccessat(int *dfd, void *filename_user, int *mode, int *flags) { return 0; }\n"
         "\n"
         "/* Inert weishu selinux-hide + init_rc symbols referenced by susfs's 50_ patch\n"
-         " * (security/selinux/hooks.c, fs/stat.c). SukiSU has its OWN selinux-hide\n"
+        " * (security/selinux/hooks.c, fs/stat.c). KSUN v3.3.0 has its OWN selinux-hide\n"
         " * (feature/selinux_hide.c, static symbols), so keep the weishu path dormant:\n"
         " * running=false -> hooks.c takes the normal selinux path; the init_rc key just\n"
         " * gates the no-op ksu_handle_vfs_fstat stub. KSUN's static copies don't clash. */\n"
@@ -207,7 +205,7 @@ import sys, re
 src = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 out = []
 # Files whose 50_ hunk is PURELY weishu-KSU infrastructure (0 susfs content) and
-# which SukiSU either implements itself (selinux-hide) or doesn't use
+# which KSUN v3.3.0 either implements itself (selinux-hide) or doesn't use
 # (kprobe mode, not manual input/init_rc/read hooks). Verified: grep susfs_ == 0.
 DROP_WHOLE = ('a/kernel/reboot.c',            # calls ksu_handle_sys_reboot (kprobe handles it)
               'a/security/selinux/selinuxfs.c',# weishu selinux-hide; KSUN has its own
@@ -267,9 +265,8 @@ open(f,"w").write(s)
 print("  [+] namespace.c susfs decls applied")
 PY
 rm -f fs/namespace.c.rej fs/namespace.c.orig   # only the known hunk-1 reject survives the gate above
-find . -name '*.orig' -delete
 
-# --- 6b) NetHunter: mask DirtySepolicy canaries in selinux_hide (fsck cap; adbd->adbroot) ---
+# --- 6b) Theettam: mask DirtySepolicy canaries in selinux_hide (fsck cap; adbd->adbroot) ---
 # Duck Detector probes fsck_untrusted->self:capability sys_admin and adbd->adbroot:binder,
 # both of which VoltageOS device sepolicy legitimately allows. Keep the live rules (fsck +
 # Lineage adb-root still work) but report those DirtySepolicy edges as denied to apps.
@@ -284,7 +281,7 @@ needle = 'length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x",
 i = s.find(needle)
 if i < 0:
     sys.stderr.write("::error::selinux_hide.c scnprintf anchor not found\n"); sys.exit(1)
-mask = ('/* NetHunter: neutralise DirtySepolicy canaries (fsck cap; adbd->adbroot) */\n'
+mask = ('/* Theettam: neutralise DirtySepolicy canaries (fsck cap; adbd->adbroot) */\n'
         '    if (scon && tcon && strstr(scon, ":fsck_untrusted:") && strstr(tcon, ":fsck_untrusted:"))\n'
         '        avd.allowed &= ~(1U << 21); /* CAP_SYS_ADMIN */\n'
         '    if (scon && tcon && strstr(scon, ":adbd:") && strstr(tcon, ":adbroot:"))\n'

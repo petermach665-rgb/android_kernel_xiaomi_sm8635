@@ -4,7 +4,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=NetHunter peridot Kernel
+kernel.string=Theettam Kernel
 do.devicecheck=0
 do.modules=0
 do.systemless=0
@@ -30,10 +30,10 @@ no_magisk_check=1
 
 kernel_version=$(cat /proc/version | awk -F '-' '{print $1}' | awk '{print $3}')
 
-## ---------------------- NetHunter banner ----------------------
+## ---------------------- Theettam banner ----------------------
 ui_print " "
 ui_print "   =========================================="
-ui_print "      /~~\\   NETHUNTER KERNEL  /~~\\"
+ui_print "      /~~\\   THEETTAM KERNEL   /~~\\"
 ui_print "     /    \\_      __/\\__      _/    \\"
 ui_print "     \\_       >>--  \\/  --<<       _/"
 ui_print "        \\~~/   peridot . SM8635  \\~~/"
@@ -47,12 +47,16 @@ if [ -f "$home/version" ]; then
   while read -r line; do ui_print "   $line"; done < "$home/version"
 fi
 ui_print " "
-ui_print "   >>>  Flashing NetHunter onto boot...  <<<"
+ui_print "   >>>  Flashing Theettam onto boot...  <<<"
 ui_print " "
 ui_print "   ------------------------------------------"
-ui_print "    NetHunter kernel for peridot / SM8635"
-ui_print "    Use the matching vendor_dlkm image when supplied."
+ui_print "    Psst... curious what 'Theettam' means?"
+ui_print "    Open Google and search (in Malayalam):"
 ui_print " "
+ui_print "         >>   theettam malayalam meaning   <<"
+ui_print " "
+ui_print "    ...go on, we'll wait.  thank us later :)"
+ui_print "   ------------------------------------------"
 ui_print " "
 ## -------------------------------------------------------------
 

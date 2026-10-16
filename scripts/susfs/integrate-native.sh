@@ -49,7 +49,6 @@ open(f,"w").write(s)
 print("  [+] namespace.c susfs decls applied")
 PY
 rm -f fs/namespace.c.rej fs/namespace.c.orig   # only the known hunk-1 reject survives the gate above
-find . -name '*.orig' -delete
 
 # vendor modules must still load after susfs CRC changes
 for f in android/abi_gki_protected_exports_aarch64 android/abi_gki_protected_exports_x86_64; do
