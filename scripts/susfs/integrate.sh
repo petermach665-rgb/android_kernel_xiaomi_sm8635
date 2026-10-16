@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# KernelSU-Next v3.3.0 + SUSFS v2.2.0 integration (hand-authored)
+# KernelSU-Next v3.4.2 + SUSFS v2.3.0 integration (hand-authored)
 # Driver side: graft susfs CMD dispatch into KSUN's existing reboot kprobe.
 # Kernel side: apply susfs fs-side (50_) minus the conflicting setresuid hunk.
 set -euo pipefail
 
-KSUN_DIR="${1:?KSUN dir}"      # KernelSU-Next checkout (v3.3.0)
-S4K_DIR="${2:?susfs4ksu dir}"  # susfs4ksu gki-android14-6.1 (v2.2.0)
+KSUN_DIR="${1:?KSUN dir}"      # KernelSU-Next checkout (v3.4.2)
+S4K_DIR="${2:?susfs4ksu dir}"  # susfs4ksu gki-android14-6.1 (v2.3.0)
 KROOT="${3:?kernel root}"      # the peridot kernel tree
 
 P10="$S4K_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
@@ -99,7 +99,7 @@ PY
 # --- 2b) selinux.c: define susfs_is_current_ksu_domain() ---
 # The fs-side (fs/namespace.c, fs/proc_namespace.c) externs this but defines it
 # nowhere. Raw-KSU defines it in its driver via a bespoke susfs_ksu_sid. KSUN
-# v3.3.0 already caches the ksu-domain SID, so we just delegate to is_ksu_domain().
+# v3.4.2 already caches the ksu-domain SID, so we just delegate to is_ksu_domain().
 python3 - "$KSUN_DIR/kernel/selinux/selinux.c" <<'PY'
 import sys
 f = sys.argv[1]
@@ -111,6 +111,7 @@ assert 'security_secctx_to_secid(' in code, "KSUN security_secctx_to_secid usage
 # define the globals and resolve them via security_secctx_to_secid at init.
 glue = ("\n#ifdef CONFIG_KSU_SUSFS\n"
         "#include <linux/jump_label.h>  /* DEFINE_STATIC_KEY_TRUE */\n"
+        "#include <linux/namei.h>       /* struct filename */\n"
         "/* --- susfs glue (hand-port) --- */\n"
         "u32 susfs_ksu_sid __read_mostly = 0;      /* consumed by security/selinux/avc.c */\n"
         "u32 susfs_priv_app_sid __read_mostly = 0;  /* consumed by security/selinux/avc.c */\n"
@@ -143,23 +144,21 @@ glue = ("\n#ifdef CONFIG_KSU_SUSFS\n"
         "}\n"
         "\n"
         "/* Vestigial weishu manual-hook shims. susfs's 50_ patch adds these inline\n"
-        " * su-hooks in fs/{stat,exec,open}.c; KSUN v3.3.0 uses kprobe hooks, so they\n"
+         " * su-hooks in fs/{stat,exec,open}.c; KSUN v3.4.2 keeps its own hook paths, so they\n"
         " * are no-ops here (return 0 = 'not handled, proceed'). susfs's OWN enforcement\n"
         " * (susfs_sus_kstat_spoof_*, sus_path/mount) is separate and unaffected. */\n"
-        "/* WEAK: KernelSU-Next v3.4.x refactored sucompat and now DEFINES some of\n"
-        " * these symbols itself (ksu_handle_execveat[_sucompat], ksu_handle_stat,\n"
-        " * ksu_handle_faccessat). A strong stub would be a duplicate symbol at link\n"
-        " * time. weak lets the linker drop ours wherever KSUN provides a real one,\n"
-        " * and keep ours only for the symbols KSUN still lacks (vfs_fstat). */\n"
-        "int __attribute__((weak)) ksu_handle_stat(int *dfd, void *filename, int *flags) { return 0; }\n"
-        "void __attribute__((weak)) ksu_handle_vfs_fstat(int fd, void *kstat_size_ptr) { }\n"
-        "int __attribute__((weak)) ksu_handle_execveat(int *fd, void *filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
-        "int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, void *filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
-        "int __attribute__((weak)) ksu_handle_faccessat(int *dfd, void *filename_user, int *mode, int *flags) { return 0; }\n"
-        "int __attribute__((weak)) ksu_handle_post_execveat_sucompat(int *fd, void *filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
+         "/* WEAK: the 50_ fs patch declares these exact filename-based hooks. A\n"
+         " * strong copy would become a duplicate if a future KSUN sucompat tree\n"
+         " * provides one, so keep every compatibility shim weak. */\n"
+         "int __attribute__((weak)) ksu_handle_stat(int *dfd, struct filename **filename, int *flags) { return 0; }\n"
+         "void __attribute__((weak)) ksu_handle_vfs_fstat(int fd, void *kstat_size_ptr) { }\n"
+         "int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
+         "int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }\n"
+         "int __attribute__((weak)) ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *flags) { return 0; }\n"
+         "int __attribute__((weak)) ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags, int *retval) { return 0; }\n"
         "\n"
         "/* Inert weishu selinux-hide + init_rc symbols referenced by susfs's 50_ patch\n"
-        " * (security/selinux/hooks.c, fs/stat.c). KSUN v3.3.0 has its OWN selinux-hide\n"
+         " * (security/selinux/hooks.c, fs/stat.c). KSUN v3.4.2 has its OWN selinux-hide\n"
         " * (feature/selinux_hide.c, static symbols), so keep the weishu path dormant:\n"
         " * running=false -> hooks.c takes the normal selinux path; the init_rc key just\n"
         " * gates the no-op ksu_handle_vfs_fstat stub. KSUN's static copies don't clash. */\n"
@@ -204,7 +203,7 @@ import sys, re
 src = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 out = []
 # Files whose 50_ hunk is PURELY weishu-KSU infrastructure (0 susfs content) and
-# which KSUN v3.3.0 either implements itself (selinux-hide) or doesn't use
+# which the current KSUN tree either implements itself (selinux-hide) or doesn't use
 # (kprobe mode, not manual input/init_rc/read hooks). Verified: grep susfs_ == 0.
 DROP_WHOLE = ('a/kernel/reboot.c',            # calls ksu_handle_sys_reboot (kprobe handles it)
               'a/security/selinux/selinuxfs.c',# weishu selinux-hide; KSUN has its own
@@ -264,6 +263,9 @@ open(f,"w").write(s)
 print("  [+] namespace.c susfs decls applied")
 PY
 rm -f fs/namespace.c.rej fs/namespace.c.orig   # only the known hunk-1 reject survives the gate above
+# patch(1) leaves .orig copies for every file whose hunks applied; they are
+# useful while debugging a graft but must not leak into the build worktree.
+find . -name '*.orig' -delete
 
 # --- 7) empty the protected-exports ABI lists so vendor modules (wifi/bt) still
 # load after susfs's symbol/CRC changes. Standard for susfs+GKI; matches the

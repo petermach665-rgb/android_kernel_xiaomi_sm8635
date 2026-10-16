@@ -1,7 +1,7 @@
 #!/bin/bash
-# build-flavor.sh — build one Theettam flavor exactly the way the release
-# workflow (.github/workflows/build-theettam-20.yml) does, so a local build on
-# ServerHive and a CI build are the same thing.
+# build-flavor.sh — build one NetHunter flavor exactly the way the release
+# workflow (.github/workflows/build-nethunter.yml) does, so a local build and
+# a CI build are the same thing.
 #
 #   scripts/ci/build-flavor.sh <flavor>
 #
@@ -18,7 +18,7 @@
 # The SUSFS/DroidSpaces integration scripts MODIFY TRACKED FILES (fs/*, kernel/*,
 # include/linux/sched.h, drivers/Kconfig, ...). Run this in a dedicated git
 # worktree, never in your main checkout:
-#   git worktree add --detach /path/wt-sukisu theettam-2.7
+#   git worktree add --detach /path/wt-sukisu nethunter-crdroid16
 #   (cd /path/wt-sukisu && scripts/ci/build-flavor.sh sukisu-susfs)
 # To rebuild in the same worktree: git reset --hard <ref> && git clean -ffdx -e out
 # (double -f: KernelSU/ and susfs4ksu/ are nested git repos, single -f skips them).
@@ -27,7 +27,7 @@
 #   CLANG_DIR     toolchain root with bin/clang   (default: $HOME/clang)
 #   OUT           kbuild output dir               (default: out)
 #   JOBS          make -j                         (default: nproc)
-#   ZIP_PREFIX    zip name prefix                 (default: Theettam)
+#   ZIP_PREFIX    zip name prefix                 (default: NetHunter)
 #   ZIP_VERSION   version string in the zip name  (default: dev)
 #   DIST          where zip/Image/symvers land    (default: dist)
 #   APATCH_SUPERKEY  superkey baked into the APatch Image (REQUIRED for apatch; no default)
@@ -51,7 +51,7 @@ DEFCONFIG="${DEFCONFIG:-gki_defconfig}"
 DIST="${DIST:-dist}"
 JOBS="${JOBS:-$(nproc --all)}"
 CLANG_DIR="${CLANG_DIR:-$HOME/clang}"
-ZIP_PREFIX="${ZIP_PREFIX:-Theettam}"
+ZIP_PREFIX="${ZIP_PREFIX:-NetHunter}"
 ZIP_VERSION="${ZIP_VERSION:-dev}"
 export ARCH=arm64 SUBARCH=arm64 LLVM=1 LLVM_IAS=1
 export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-build}" KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-localhost}"
@@ -77,9 +77,11 @@ esac
 
 # ---- preconditions ----------------------------------------------------------
 have clang || die "clang not in PATH (CLANG_DIR=$CLANG_DIR)"
-log "flavor=$FLAVOR  clang: $(clang --version | head -1)"
+CLANG_VERSION="$(clang --version | python3 -c 'import sys; print(sys.stdin.readline().rstrip())')"
+log "flavor=$FLAVOR  clang: $CLANG_VERSION"
 if [ "${ALLOW_OTHER_CLANG:-0}" != 1 ]; then
-  clang --version | head -1 | grep -qF "$NEUTRON_CLANG_ID" || die "clang is not the pinned release toolchain ($NEUTRON_CLANG_ID, build $NEUTRON_BUILD); set CLANG_DIR to it or ALLOW_OTHER_CLANG=1 for a deliberate experiment"
+  printf '%s\n' "$CLANG_VERSION" | grep -qF "$AOSP_CLANG_ID" || die "clang is not the pinned AOSP toolchain ($AOSP_CLANG_REV); set CLANG_DIR to it or ALLOW_OTHER_CLANG=1 for a deliberate experiment"
+  printf '%s\n' "$CLANG_VERSION" | grep -qF "$AOSP_CLANG_REV" || die "clang does not report the pinned AOSP revision ($AOSP_CLANG_REV); set CLANG_DIR to it or ALLOW_OTHER_CLANG=1 for a deliberate experiment"
 fi
 grep -qE '^SUBLEVEL = (174|175|176)' Makefile || die "base is not 6.1.174/175/176"
 grep -q '^CONFIG_SCHED_BORE=y' arch/arm64/configs/gki_defconfig || log '[~] BORE not in this base (crDroid) - skipping'
@@ -244,11 +246,14 @@ if [ "$DROIDSPACES" = 1 ]; then
 fi
 
 # ---- 5. build ---------------------------------------------------------------------------------
-export KBUILD_COMPILER_STRING="$(clang --version | head -n1)"
+export KBUILD_COMPILER_STRING="$CLANG_VERSION"
 CCW=clang; if [ "${USE_CCACHE:-1}" = 1 ] && have ccache; then CCW="ccache clang"; fi
 log "build: make -j$JOBS O=$OUT CC='$CCW'"
-make -j"$JOBS" O="$OUT" CC="$CCW" 2>&1 | tee "$OUT/build.log" | grep -E --line-buffered 'error:|Error [0-9]|LD      vmlinux$|OBJCOPY arch/arm64/boot/Image' || true
-[ "${PIPESTATUS[0]}" = 0 ] || die "kernel build failed (see $OUT/build.log)"
+set +e
+make -j"$JOBS" O="$OUT" CC="$CCW" 2>&1 | tee "$OUT/build.log" | grep -E --line-buffered 'error:|Error [0-9]|LD      vmlinux$|OBJCOPY arch/arm64/boot/Image'
+MAKE_STATUS="${PIPESTATUS[0]}"
+set -e
+[ "$MAKE_STATUS" = 0 ] || die "kernel build failed (see $OUT/build.log)"
 IMG="$OUT/arch/arm64/boot/Image"; [ -f "$IMG" ] || die "no Image"
 KREL="$(cat "$OUT/include/config/kernel.release")"
 
@@ -301,9 +306,9 @@ cp -f "$CFG" "$DIST/config-$FLAVOR"
 if [ "${SKIP_ZIP:-0}" != 1 ]; then
   AK="$OUT/AnyKernel3"; rm -rf "$AK"; cp -r anykernel "$AK"; cp -f "$IMG" "$AK/Image"
   # '|' delimiter: labels contain '/' (e.g. "APatch / KernelPatch")
-  sed -i "s|^kernel.string=.*|kernel.string=Theettam · $LABEL|" "$AK/anykernel.sh"
-  grep -q "^kernel.string=Theettam · " "$AK/anykernel.sh" || die "kernel.string substitution failed"
-  printf '%s\n%s\n%s\n' "Theettam $ZIP_VERSION · $LABEL" "POCO F6 / Redmi Turbo 3 (peridot · SM8635)" "GKI $KREL" > "$AK/version"
+  sed -i "s|^kernel.string=.*|kernel.string=NetHunter · $LABEL|" "$AK/anykernel.sh"
+  grep -q "^kernel.string=NetHunter · " "$AK/anykernel.sh" || die "kernel.string substitution failed"
+  printf '%s\n%s\n%s\n' "NetHunter $ZIP_VERSION · $LABEL" "POCO F6 / Redmi Turbo 3 (peridot · SM8635)" "GKI $KREL" > "$AK/version"
   ZIP="$ZIP_PREFIX-$ZIP_VERSION-$ZIPNAME-peridot-$KREL.zip"
   ( cd "$AK" && zip -q -r9 "$OLDPWD/$DIST/$ZIP" . -x '.git*' )
   log "zip: $DIST/$ZIP ($(stat -c%s "$DIST/$ZIP") bytes)"

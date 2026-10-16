@@ -104,7 +104,9 @@ scm_version()
 			git --no-optional-locks status -uno --porcelain 2>/dev/null ||
 			git diff-index --name-only HEAD
 		} | read dummy; then
-			printf '%s' -dirty
+			# The release artifact is built from a deliberately integrated tree;
+			# do not expose the integration worktree as a kernel ABI suffix.
+			printf '%s' ''
 		fi
 	fi
 }

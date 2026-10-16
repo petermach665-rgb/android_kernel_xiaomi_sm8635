@@ -51,23 +51,8 @@ int check_version(const struct load_info *info,
 	return 1;
 
 bad_version:
-	/* Peridot / NetHunter: per-symbol CRC check downgraded to a warning.
-	 *
-	 * The stock /vendor_dlkm modules were produced by the ROM's own kernel
-	 * build. Their per-symbol CRCs do not match ours even though
-	 * module_layout does (see manual 12.14 / 12.17), so the strict check
-	 * would refuse to load ALL 401 prebuilt modules on /vendor_dlkm:
-	 * display, touch, camera, wlan, audio. 101 of them cannot be rebuilt
-	 * from this tree at all (no sources for msm_drm / msm_kgsl / camera /
-	 * qca_cld3_qca6750 / cnss2 / adsp_loader_dlkm / ...).
-	 *
-	 * module_layout is still verified strictly (check_modstruct_version),
-	 * and that check matches the stock modules 401/401 -- it is the
-	 * KMI-wide ABI guard and stays intact.
-	 */
-	pr_warn_once("%s: symbol %s crc mismatch (per-symbol CRC check relaxed, manual 12.17)\n",
-		     info->name, symname);
-	return 1;
+	pr_warn("%s: disagrees about version of symbol %s\n", info->name, symname);
+	return 0;
 }
 
 int check_modstruct_version(const struct load_info *info,
